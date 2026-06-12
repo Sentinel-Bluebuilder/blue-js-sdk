@@ -15,7 +15,7 @@ import {
 import { existsSync } from 'fs';
 import { execSync } from 'child_process';
 import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -100,6 +100,26 @@ function findWireGuard() {
     if (result) return result.split('\n')[0];
   } catch { /* not in PATH */ }
   return null;
+}
+
+// ─── V2Ray Auto-Install ──────────────────────────────────────────────────────
+
+/**
+ * Download V2Ray via the parent SDK's setup script (no admin rights needed).
+ * Downloads the official v2fly release zip, verifies SHA256, unzips to the
+ * SDK's bin/ directory — the same location findV2Ray() checks first.
+ * Throws with context when the setup script is missing or the download fails.
+ */
+async function installV2Ray() {
+  const parentSetup = resolve(__dirname, '..', 'setup.js');
+  if (!existsSync(parentSetup)) {
+    throw new Error(`SDK setup script not found at ${parentSetup} — reinstall blue-js-sdk`);
+  }
+  const mod = await import(pathToFileURL(parentSetup).href);
+  if (typeof mod.setupV2Ray !== 'function') {
+    throw new Error('SDK setup script does not export setupV2Ray() — blue-js-sdk version too old (need >= 2.8.0)');
+  }
+  await mod.setupV2Ray();
 }
 
 // ─── getEnvironment() ────────────────────────────────────────────────────────
@@ -192,9 +212,15 @@ export function getEnvironment() {
  * Full environment setup: check deps, install missing ones, report status.
  * Runs preflight checks that verify everything needed for a VPN connection.
  *
+ * When no usable tunnel protocol is detected (no V2Ray, and no WireGuard
+ * usable without admin), setup() auto-downloads V2Ray to the SDK's bin/
+ * directory — no admin rights needed. Pass { autoInstall: false } to skip.
+ *
  * Returns a FLAT structure — agents access .os, .v2ray, .wireguard directly.
  * No nested .environment wrapper to misread.
  *
+ * @param {object} [opts]
+ * @param {boolean} [opts.autoInstall=true] - Download V2Ray when no usable tunnel binary exists
  * @returns {Promise<{
  *   ready: boolean,
  *   os: string,
@@ -207,15 +233,35 @@ export function getEnvironment() {
  *   v2rayPath: string|null,
  *   wireguard: boolean,
  *   wireguardPath: string|null,
+ *   installed: boolean,
  *   capabilities: string[],
  *   recommended: string[],
  *   preflight: object|null,
  *   issues: string[],
  * }>}
  */
-export async function setup() {
-  const env = getEnvironment();
+export async function setup(opts = {}) {
+  const autoInstall = opts.autoInstall !== false;
+  let env = getEnvironment();
   const issues = [];
+  let installed = false;
+
+  // Auto-install V2Ray when nothing usable is present. 'wireguard' only
+  // appears in capabilities when the binary exists AND we have admin — a
+  // non-admin WireGuard-only machine still cannot connect, so V2Ray
+  // (which needs no admin) is downloaded for that case too.
+  if (autoInstall && !env.v2ray.available && !env.capabilities.includes('wireguard')) {
+    try {
+      await installV2Ray();
+      env = getEnvironment(); // re-detect — bin/ now holds v2ray + geoip/geosite
+      installed = env.v2ray.available;
+      if (!installed) {
+        issues.push('V2Ray download completed but binary still not detected — check SDK bin/ directory permissions');
+      }
+    } catch (err) {
+      issues.push(`V2Ray auto-install failed: ${err.message}`);
+    }
+  }
 
   // Run preflight checks — pass already-detected V2Ray path to avoid contradiction (BUG-1 fix)
   let preflightResult = null;
@@ -234,7 +280,7 @@ export async function setup() {
   }
 
   if (!env.v2ray.available && !env.wireguard.available) {
-    issues.push('No tunnel protocol available — install V2Ray or WireGuard');
+    issues.push('No tunnel protocol available — install V2Ray or WireGuard (re-run setup() or: node node_modules/blue-js-sdk/setup.js)');
   }
 
   if (env.v2ray.available && env.v2ray.version && env.v2ray.version !== V2RAY_VERSION) {
@@ -256,6 +302,7 @@ export async function setup() {
     v2rayPath: env.v2ray.path,
     wireguard: env.wireguard.available,
     wireguardPath: env.wireguard.path,
+    installed,
     capabilities: env.capabilities,
     recommended: env.recommended,
     preflight: preflightResult,
