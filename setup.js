@@ -93,7 +93,7 @@ function unzip(zipPath, destDir) {
 
 // ─── V2Ray ──────────────────────────────────────────────────────────────────
 
-async function setupV2Ray() {
+export async function setupV2Ray() {
   const v2rayPath = path.join(BIN_DIR, V2RAY_BINARY);
 
   // Check if already exists
@@ -230,7 +230,7 @@ function isAdmin() {
   return process.getuid?.() === 0;
 }
 
-async function setupWireGuard() {
+export async function setupWireGuard() {
   const existing = findWireGuard();
   if (existing) {
     ok(`WireGuard found at ${existing}`);
@@ -349,15 +349,23 @@ function checkDeps() {
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
+/**
+ * Full setup: npm deps + V2Ray download + WireGuard install/instructions.
+ * Importable — throws on failure instead of exiting the process.
+ */
+export async function setup() {
+  checkDeps();
+  await setupV2Ray();
+  await setupWireGuard();
+}
+
 async function main() {
   console.log('');
   console.log('  Sentinel dVPN SDK — Setup');
   console.log('  ─────────────────────────');
   console.log('');
 
-  checkDeps();
-  await setupV2Ray();
-  await setupWireGuard();
+  await setup();
 
   console.log('');
   console.log('  Setup complete! Quick start:');
@@ -370,7 +378,15 @@ async function main() {
   console.log('');
 }
 
-main().catch(err => {
-  console.error(`[setup] Fatal: ${err.message}`);
-  process.exit(1);
-});
+// Run main() only when executed directly (node setup.js) — NOT on import.
+// ai-path/environment.js imports setupV2Ray() to auto-install during setup()/connect();
+// running main() on import would trigger npm install + WireGuard MSI as a side effect.
+const isDirectRun = process.argv[1]
+  && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectRun) {
+  main().catch(err => {
+    console.error(`[setup] Fatal: ${err.message}`);
+    process.exit(1);
+  });
+}

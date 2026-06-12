@@ -47,6 +47,8 @@ Post-install runs `setup.js` automatically to download V2Ray 5.2.1. If it fails 
 npx sentinel-ai setup
 ```
 
+If the install ran with `--ignore-scripts` (common in CI and agent sandboxes), nothing is lost: both `setup()` and `connect()` detect the missing binary at runtime and auto-download V2Ray before any tokens are spent.
+
 ### Requirements
 
 | Requirement | Details |
@@ -325,9 +327,19 @@ const bal = await getBalance(process.env.MNEMONIC);
 console.log(`${bal.p2p} (${bal.udvpn} udvpn) — funded: ${bal.funded}`);
 ```
 
-### `setup()` -> `{ ready, environment, preflight, issues }`
+### `setup(opts?)` -> `{ ready, v2ray, wireguard, admin, installed, capabilities, preflight, issues, ... }`
 
-Verifies dependencies (V2Ray binary, WireGuard, Node.js version) and tests chain reachability. Returns `ready: true` if all required dependencies are present. Check `issues: string[]` for what is missing. The `environment` field contains the same data as `getEnvironment()`.
+Verifies dependencies (V2Ray binary, WireGuard, Node.js version) and tests chain reachability. **If no usable tunnel binary exists** (no V2Ray, and WireGuard either missing or unusable without admin), `setup()` **auto-downloads V2Ray** to the SDK's `bin/` directory — no admin rights needed, SHA256-verified. Pass `{ autoInstall: false }` to disable.
+
+Returns a flat structure: `ready: true` when a connection is possible right now. `installed: true` when this call downloaded V2Ray. Check `issues: string[]` for anything missing. The `environment` field still carries the nested `getEnvironment()` data for backward compatibility.
+
+```js
+import { setup } from 'blue-js-sdk/ai-path';
+const env = await setup();           // downloads V2Ray if nothing usable is present
+console.log(env.ready, env.v2ray, env.installed);
+```
+
+`connect()` runs the same gate automatically at step 1: missing binary → auto-install → if still unusable, throws `ENVIRONMENT_NOT_READY` **before any tokens are spent**.
 
 ### `discoverNodes(opts?)` -> `Node[]`
 
@@ -408,6 +420,7 @@ try {
 | `SESSION_EXTRACT_FAILED` | recoverable | TX succeeded but session ID extraction failed |
 | `PARTIAL_CONNECTION_FAILED` | recoverable | Payment succeeded, tunnel failed. Session is on-chain. |
 | `V2RAY_NOT_FOUND` | infrastructure | V2Ray binary not found. Run `setup()`. |
+| `ENVIRONMENT_NOT_READY` | infrastructure | No usable tunnel binary and auto-install failed. Thrown at step 1, BEFORE any tokens are spent. Run `setup()`. |
 | `WG_NOT_AVAILABLE` | infrastructure | WireGuard not installed |
 | `TLS_CERT_CHANGED` | infrastructure | Node TLS certificate changed unexpectedly |
 | `SESSION_POISONED` | fatal | Session previously failed. Start a new one. |
@@ -503,7 +516,7 @@ blue-agent-connect
 ### Connection Lifecycle
 
 ```
-1. SETUP       Download V2Ray, verify dependencies
+1. SETUP       Detect environment; auto-download V2Ray if no usable tunnel binary (gates BEFORE payment)
 2. WALLET      Derive keypair from mnemonic
 3. DISCOVER    Query blockchain for online nodes with P2P pricing
 4. SELECT      Pick best node (by country, price, protocol, or auto)
