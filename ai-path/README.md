@@ -189,7 +189,9 @@ const vpn = await connect({
 | `killSwitch` | `boolean` | `false` | Block all non-tunnel traffic while connected. **UNTESTED — code exists but never verified on mainnet. WireGuard only.** |
 | `maxAttempts` | `number` | `3` | Max nodes to try on auto-connect before failing |
 | `timeout` | `number` | `120000` | Connection timeout in milliseconds (2 minutes) |
-| `onProgress` | `function` | `null` | `(step: string, detail: string) => void` |
+| `onProgress` | `function` | `null` | `(stage: string, detail: string) => void` — structured stages only (`wallet`/`node-check`/`session`/`handshake`/`tunnel`/`verify`). Fires once per stage. |
+| `onLog` | `function` | `null` | `(message: string) => void` — raw SDK log lines. Use for verbose tracing; otherwise prefer `onProgress`. |
+| `silent` | `boolean` | `false` | Suppress the SDK's built-in `[STEP X/Y]` console output (consumer drives its own log via `onProgress`). |
 | `signal` | `AbortSignal` | `null` | AbortController signal for cancellation |
 | `v2rayExePath` | `string` | `auto` | Path to V2Ray binary. Auto-detected from `bin/` |
 

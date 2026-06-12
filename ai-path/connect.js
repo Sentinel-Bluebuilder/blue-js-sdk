@@ -287,7 +287,11 @@ async function preValidateBalance(mnemonic) {
  * @param {string|number} [opts.subscriptionId] - Connect via existing subscription (operator-provisioned)
  * @param {string|number} [opts.planId] - Connect via plan (subscribes + starts session)
  * @param {string} [opts.feeGranter] - Operator address that pays gas (sent1...). Skips balance check.
- * @param {function} [opts.onProgress] - Progress callback: (stage, message) => void
+ * @param {function} [opts.onProgress] - Structured stage callback: (stage, message) => void.
+ *   Stages: 'wallet'|'node-check'|'validate'|'session'|'handshake'|'tunnel'|'verify'|'dry-run'.
+ *   Each stage fires exactly once per transition — no 'log' duplicates.
+ * @param {function} [opts.onLog] - Raw SDK log callback: (message) => void. Receives every
+ *   internal log line. Use this for verbose tracing; otherwise prefer onProgress.
  * @param {number} [opts.timeout] - Connection timeout in ms (default: 120000 — 2 minutes)
  * @param {boolean} [opts.silent] - If true, suppress step-by-step console output
  * @returns {Promise<{
@@ -538,7 +542,9 @@ export async function connect(opts = {}) {
       }
     },
     log: (msg) => {
-      if (opts.onProgress) opts.onProgress('log', msg);
+      // Raw SDK logs go to opts.onLog only. Do NOT forward to onProgress —
+      // that duplicates every structured stage event with a 'log' sibling.
+      if (opts.onLog) opts.onLog(msg);
     },
   };
 
