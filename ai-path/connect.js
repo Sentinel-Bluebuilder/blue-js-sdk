@@ -181,6 +181,10 @@ function humanError(err) {
       message: 'V2Ray binary not found. Run setup first: node setup.js',
       nextAction: 'run_setup',
     },
+    ENVIRONMENT_NOT_READY: {
+      message: 'No usable tunnel binary. Run setup() from blue-js-sdk/ai-path — it auto-downloads V2Ray (no admin needed).',
+      nextAction: 'run_setup',
+    },
     HANDSHAKE_FAILED: {
       message: 'Handshake with node failed. The node may be overloaded — try another.',
       nextAction: 'try_different_node',
@@ -340,6 +344,33 @@ export async function connect(opts = {}) {
   } catch { /* environment detection failed */ }
 
   log(1, totalSteps, 'ENVIRONMENT', `OS=${envInfo.os} | admin=${envInfo.admin} | v2ray=${envInfo.v2ray} | wireguard=${envInfo.wireguard}`);
+
+  // Gate HERE, before any wallet/balance/on-chain work. Without this guard a
+  // binary-less agent burns a real MsgStartSession TX (and the fee granter's
+  // allowance) only to fail at the tunnel step with V2RAY_NOT_FOUND.
+  // WireGuard without admin cannot connect either, so that case also gates.
+  const wgUsable = envInfo.wireguard && envInfo.admin;
+  if (!envInfo.v2ray && !wgUsable && opts.dryRun !== true) {
+    log(1, totalSteps, 'ENVIRONMENT', 'No usable tunnel binary — auto-installing V2Ray (no admin needed)...');
+    try {
+      const { setup } = await import('./environment.js');
+      const result = await setup(); // downloads V2Ray when missing, re-detects
+      envInfo.v2ray = result.v2ray;
+      envInfo.v2rayPath = result.v2rayPath;
+      envInfo.wireguard = result.wireguard;
+      envInfo.admin = result.admin;
+    } catch (err) {
+      log(1, totalSteps, 'ENVIRONMENT', `Auto-setup failed: ${err.message}`);
+    }
+    if (!envInfo.v2ray && !(envInfo.wireguard && envInfo.admin)) {
+      const err = new Error('No usable tunnel binary (V2Ray missing; WireGuard missing or needs admin). Run setup() from blue-js-sdk/ai-path, or: node node_modules/blue-js-sdk/setup.js. No tokens were spent.');
+      err.code = 'ENVIRONMENT_NOT_READY';
+      err.nextAction = 'run_setup';
+      err.details = { v2ray: envInfo.v2ray, wireguard: envInfo.wireguard, admin: envInfo.admin };
+      throw err;
+    }
+    log(1, totalSteps, 'ENVIRONMENT', `Tunnel binary ready: v2ray=${envInfo.v2ray}${envInfo.v2rayPath ? ` (${envInfo.v2rayPath})` : ''}`);
+  }
   timings.environment = Date.now() - t0;
 
   // ── STEP 2/7: Wallet ──────────────────────────────────────────────────────

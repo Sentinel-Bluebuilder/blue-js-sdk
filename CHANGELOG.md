@@ -2,6 +2,51 @@
 
 Every fix made during SDK creation, why it matters, and what happens if you use upstream Sentinel code directly without these fixes.
 
+## v2.8.0 — Restore `ai-path` packaging + fail-fast auto-install in `connect()` (2026-06-12)
+
+Two regressions, one failure class, found by an AI-agent consumer (x402 pay-per-use
+VPN flow) running on a machine with no tunnel binary installed.
+
+**1. Published 2.7.2 shipped without `ai-path` entirely.** A package.json revert
+(commit `f6162f4`) dropped `"./ai-path"` from `exports`, `ai-path/` from `files`,
+and the `sentinel-ai` bin. Because an `exports` map is present, every npm consumer
+of `import 'blue-js-sdk/ai-path'` threw `ERR_PACKAGE_PATH_NOT_EXPORTED` — the exact
+failure class v2.7.2's CI gate was built for, except that gate only imported the
+package ROOT, so subpath drift slipped through. Only apps pinned to 2.3.0 kept working.
+
+**2. A binary-less agent burned a real on-chain session.** `connect()` step 1
+detected the environment but never gated on it: wallet, balance check, node
+selection, and the MsgStartSession TX all ran, then the tunnel step failed with
+`V2RAY_NOT_FOUND` — wasting the session payment and the fee granter's allowance.
+
+### Fix
+- `package.json`: restored `"./ai-path": "./ai-path/index.js"` in `exports`,
+  `ai-path/` in `files`, `"sentinel-ai": "ai-path/cli.js"` in `bin`. Version 2.8.0.
+- `ai-path/connect.js`: step 1 now GATES — no V2Ray and no admin-usable WireGuard
+  → auto-download V2Ray (no admin needed); if still unusable, throw
+  `ENVIRONMENT_NOT_READY` (nextAction `run_setup`) before any chain work.
+  Skipped in `dryRun` mode.
+- `ai-path/environment.js`: `setup()` now actually installs — when no usable
+  tunnel binary exists it downloads V2Ray (SHA256-verified) via the root setup
+  script, re-detects, and reports `installed: true`. Opt out with
+  `{ autoInstall: false }`.
+- `setup.js` (root): now safe to import — `setupV2Ray()`, `setupWireGuard()`, and
+  a combined `setup()` are exported; the interactive `main()` only runs when the
+  file is executed directly (it previously ran npm-install/MSI side effects on
+  import).
+- `.github/workflows/ci.yml`: the tarball gate now also imports every subpath
+  export (`blue-js-sdk/ai-path`, `/consumer`, `/operator`) from the packed install.
+- Docs: `ai-path/README.md` (setup() API, `ENVIRONMENT_NOT_READY`, lifecycle),
+  `ai-path/FAILURES.md` (D8, D9).
+
+### Rule
+**Every subpath in `exports` must be import-tested from the packed tarball in CI**
+— a root-only import check cannot see subpath regressions. And **detection without
+a gate is decoration**: every prerequisite verified at step 1 must abort before
+the first token is spent.
+
+---
+
 ## v2.7.2 — Packaging Fix: include `auth/` and `operator/` in tarball (2026-05-02)
 
 **2.7.1 shipped without `auth/` and `operator/` directories.** `index.js` imports
