@@ -398,6 +398,12 @@ Every finding traces back to a specific project. This section documents the sour
 
 ## Pending Integration
 
+### connect() `onProgress` no longer receives `'log'` events
+**Category:** API-CONTRACT
+**Summary:** Prior to this change, `connect({ onProgress })` received both the structured stage events (`'wallet'`, `'session'`, `'tunnel'`, etc.) AND a raw `'log'` event for every internal SDK log line. Consumers ended up logging every line twice — once from `[log]` and once from the structured stage.
+**Fix:** `onProgress` now only fires for the documented structured stages. Raw logs go to a new optional `onLog(message)` callback. To suppress the SDK's own built-in `[STEP X/Y]` lines, pass `silent: true`.
+**Migration:** If you were filtering `stage === 'log'` in your callback, you can drop the check. If you depended on log lines, add `onLog: (msg) => …` to your `connect()` opts.
+
 ### [PENDING] fix-registry-backup.md
 **Category:** BUG-FIX
 **Summary:** `setSystemProxy()` overwrites Windows proxy settings with `/f` (force), no backup/restore of previous state. If user had corporate proxy, `clearSystemProxy()` sets "no proxy" instead of restoring their previous configuration.
