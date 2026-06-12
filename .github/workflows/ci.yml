@@ -200,6 +200,19 @@ jobs:
             }
             process.exit(1);
           }
+          // Subpath exports must also resolve from the tarball — 2.7.x shipped
+          // without ai-path/ in "files" or "./ai-path" in "exports", breaking
+          // every AI-agent consumer (ERR_PACKAGE_PATH_NOT_EXPORTED).
+          for (const sub of ['blue-js-sdk/ai-path', 'blue-js-sdk/consumer', 'blue-js-sdk/operator']) {
+            try {
+              const m = await import(sub);
+              console.log(`Subpath OK: ${sub} (${Object.keys(m).length} exports)`);
+            } catch (e) {
+              console.error(`FAILED to import subpath ${sub}:`, e.message);
+              console.error('Check package.json "exports" map AND "files" array — both must include it.');
+              process.exit(1);
+            }
+          }
           SCRIPT
 
       - name: Verify submodule imports resolve
