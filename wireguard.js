@@ -107,14 +107,11 @@ export function emergencyCleanupSync() {
     } catch {} // sc query may fail — no services installed
   }
 
-  // Linux/macOS: use wg-quick down for known tunnel configs
+  // Linux/macOS: tear down known tunnel configs (and any wedged kernel interface)
   if (WG_QUICK && process.platform !== 'win32') {
     for (const name of ['wgsent0', activeTunnelName].filter(Boolean)) {
-      // Try wg-quick down with the tunnel name or config path
-      const confPath = activeTunnelConf || `/tmp/sentinel-wg/${name}.conf`;
-      try { execFileSync(WG_QUICK, ['down', confPath], { timeout: 10_000, stdio: 'pipe' }); } catch {} // conf may not exist
-      // Also try by interface name directly
-      try { execFileSync(WG_QUICK, ['down', name], { timeout: 10_000, stdio: 'pipe' }); } catch {} // interface may not exist
+      const confPath = activeTunnelConf || `${os.tmpdir()}/sentinel-wg/${name}.conf`;
+      teardownLinuxInterface(name, confPath);
     }
   }
 
@@ -162,6 +159,36 @@ function runWgCommand(args, timeoutMs = 30_000) {
   }
 }
 
+// ─── Linux stale-interface teardown ───────────────────────────────────────────
+/**
+ * Best-effort removal of a leftover WireGuard interface on Linux/macOS.
+ * Tries, in order: wg-quick down by conf path, wg-quick down by bare name, then a
+ * raw `ip link delete` to clear a wedged kernel interface that wg-quick can't see.
+ * Each step is independent and must not block the next — a no-op is expected when
+ * there is nothing to remove. Does NOT throw.
+ *
+ * Why all three: a clean run is removed by wg-quick. But a crashed run leaves the
+ * interface up with its config in a TEMP dir; `wg-quick down <name>` looks for
+ * /etc/wireguard/<name>.conf (absent) and fails, so the interface survives and the
+ * next `wg-quick up` dies with "<name> already exists". Passing the real conf path
+ * fixes that; the `ip link delete` fallback handles the case where even the temp
+ * conf is gone but the kernel interface lingers.
+ */
+function teardownLinuxInterface(name, confPath) {
+  if (!WG_QUICK) return;
+  // 1. By the actual conf path (covers temp-dir configs from a crashed run).
+  if (confPath && existsSync(confPath)) {
+    try { execFileSync(WG_QUICK, ['down', confPath], { timeout: 10_000, stdio: 'pipe' }); } catch {} // conf may not be up
+  }
+  // 2. By bare interface name (covers configs installed under /etc/wireguard).
+  try { execFileSync(WG_QUICK, ['down', name], { timeout: 10_000, stdio: 'pipe' }); } catch {} // interface may not exist
+  // 3. Raw kernel interface delete — last resort for an interface wg-quick can't map
+  //    back to a config (e.g. temp conf already deleted). `ip` is Linux-only.
+  if (process.platform === 'linux') {
+    try { execFileSync('ip', ['link', 'delete', 'dev', name], { timeout: 5_000, stdio: 'pipe' }); } catch {} // interface may not exist
+  }
+}
+
 // ─── Install tunnel ───────────────────────────────────────────────────────────
 /**
  * Install and activate a WireGuard tunnel.
@@ -204,8 +231,14 @@ export async function installWgTunnel(confPath) {
 
     return activeTunnelName;
   } else if (WG_QUICK) {
-    // Force-remove any existing tunnel with this name before installing (prevents "already exists" on Linux)
-    try { execFileSync(WG_QUICK, ['down', name], { timeout: 10_000, stdio: 'pipe' }); } catch {}
+    // Force-remove any leftover interface with this name before installing, otherwise
+    // `wg-quick up` aborts with "wgsent0 already exists" (Linux full-tunnel regression).
+    // A crashed/killed previous run leaves the kernel interface AND a temp-dir conf behind;
+    // `wg-quick down <name>` alone does NOT cover the temp-dir case because it resolves the
+    // bare name against /etc/wireguard/<name>.conf, which is empty here. Tear down by the
+    // actual conf path first, then by name, then delete the raw kernel interface as a
+    // last resort so a wedged interface from a prior crash can never block reconnect.
+    teardownLinuxInterface(name, confPath);
     await sleep(500);
     execFileSync(WG_QUICK, ['up', confPath], { timeout: 30_000, stdio: 'inherit' });
     activeTunnelConf = confPath;
